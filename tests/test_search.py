@@ -8,6 +8,7 @@ from pyvecdb.search import (
     METRIC_DOT,
     METRIC_EUCLIDEAN,
     METRIC_MANHATTAN,
+    _compute_score,
     batch_search,
     knn_search,
 )
@@ -121,6 +122,20 @@ class TestKNNSearch:
             metadata_filter={"genre": "jazz"},
         )
         assert results == []
+
+
+class TestComputeScore:
+    """Tests for the internal _compute_score helper."""
+
+    def test_dot_product_checks_dimensions(self) -> None:
+        """Dot product scoring rejects mismatched dimensions instead of truncating."""
+        with pytest.raises(DimensionMismatchError):
+            _compute_score([1.0, 2.0], [1.0, 2.0, 3.0], METRIC_DOT)
+
+    def test_dot_product_value(self) -> None:
+        """Dot product scoring returns the correct sum of products."""
+        expected = 11.0  # 1*3 + 2*4
+        assert _compute_score([1.0, 2.0], [3.0, 4.0], METRIC_DOT) == expected
 
 
 class TestBatchSearch:

@@ -208,11 +208,25 @@ class VectorStore:
         Returns:
             A list of the newly created VectorRecord objects.
 
+        This is all-or-nothing: if *any* record is invalid, nothing is inserted
+        and the store is left exactly as it was -- like a shopping cart that
+        refuses to check out unless every item scans correctly.
+
         Raises:
             DuplicateIDError: If any ID already exists or is duplicated in the batch.
             DimensionMismatchError: If any vector has wrong dimensions.
 
         """
+        # Validate the whole batch first so a bad record never leaves a half-done insert.
+        seen_ids: set[str] = set()
+        for record_id, vector, _metadata in records:
+            if record_id in self._records or record_id in seen_ids:
+                msg = f"Record with ID '{record_id}' already exists"
+                raise DuplicateIDError(msg)
+            seen_ids.add(record_id)
+            self._check_dimensions(vector)
+
+        # Everything checks out -- now it is safe to insert.
         results: list[VectorRecord] = []
         for record_id, vector, metadata in records:
             results.append(self.insert(record_id, vector, metadata))
