@@ -207,3 +207,32 @@ class TestBatchInsert:
                     ("a", VEC_B, None),
                 ]
             )
+
+    def test_batch_insert_atomic_on_duplicate(self) -> None:
+        """A duplicate ID mid-batch leaves the store unchanged (no partial insert)."""
+        store = VectorStore(dimensions=DIMS_TWO)
+        store.insert("existing", VEC_A)
+        with pytest.raises(DuplicateIDError):
+            store.batch_insert(
+                [
+                    ("new1", VEC_B, None),
+                    ("existing", VEC_C, None),
+                    ("new2", VEC_C, None),
+                ]
+            )
+        assert store.count == EXPECTED_COUNT_ONE
+        assert not store.contains("new1")
+        assert not store.contains("new2")
+
+    def test_batch_insert_atomic_on_bad_dimensions(self) -> None:
+        """A wrong-dimension vector mid-batch leaves the store unchanged."""
+        store = VectorStore(dimensions=DIMS_TWO)
+        with pytest.raises(DimensionMismatchError):
+            store.batch_insert(
+                [
+                    ("a", VEC_A, None),
+                    ("b", VEC_3D, None),
+                ]
+            )
+        assert store.count == EXPECTED_COUNT_ZERO
+        assert not store.contains("a")

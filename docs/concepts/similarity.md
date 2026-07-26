@@ -22,9 +22,9 @@ Imagine everyone rates their favorite music on three scales:
 ### Step 2: Compute Similarity
 
 Using cosine similarity:
-- You vs Alice: **0.998** (almost identical -- musical twins!)
-- You vs Carol: **0.986** (pretty similar)
-- You vs Bob: **0.745** (quite different)
+- You vs Alice: **0.997** (almost identical -- musical twins!)
+- You vs Carol: **0.993** (pretty similar)
+- You vs Bob: **0.681** (quite different)
 
 ### Step 3: Rank by Similarity
 

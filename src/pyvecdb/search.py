@@ -23,7 +23,12 @@ Example:
 
 """
 
-from pyvecdb.distance import cosine_similarity, euclidean_distance, manhattan_distance
+from pyvecdb.distance import (
+    cosine_similarity,
+    dot_product,
+    euclidean_distance,
+    manhattan_distance,
+)
 from pyvecdb.errors import DimensionMismatchError, EmptyStoreError
 from pyvecdb.filtering import MetadataFilter, filter_records
 from pyvecdb.record import VectorRecord
@@ -62,8 +67,8 @@ def _compute_score(query: list[float], candidate: list[float], metric: str) -> f
         return -euclidean_distance(query, candidate)
     if metric == METRIC_MANHATTAN:
         return -manhattan_distance(query, candidate)
-    # dot product
-    return sum(q * c for q, c in zip(query, candidate, strict=False))
+    # dot product -- delegate so the same dimension check applies as the other metrics
+    return dot_product(query, candidate)
 
 
 def knn_search(

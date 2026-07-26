@@ -35,8 +35,8 @@ store.insert("ballad", [0.3, 0.4, 0.1], metadata={"genre": "rock", "year": 2019}
 results = knn_search(store, query=[0.85, 0.7, 0.8], k=2)
 for record, score in results:
     print(f"{record.record_id}: {score:.3f}")
-# thunder: 0.998
-# party-rock: 0.978
+# party-rock: 0.998
+# thunder: 0.995
 
 # Filter by metadata -- only rock songs
 results = knn_search(

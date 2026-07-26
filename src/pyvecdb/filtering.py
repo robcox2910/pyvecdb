@@ -9,7 +9,7 @@ based on these fields.
 
 Supported filter operators:
 
-- **eq** (equals): ``{"genre": "rock"}`` -- exact match
+- **$eq** (equals): ``{"genre": "rock"}`` -- exact match (plain values are shorthand for $eq)
 - **ne** (not equals): ``{"genre": {"$ne": "country"}}``
 - **gt / gte / lt / lte**: ``{"year": {"$gt": 2020}}`` -- comparisons
 - **in**: ``{"genre": {"$in": ["rock", "pop"]}}`` -- match any in list
@@ -121,6 +121,8 @@ def filter_records(
 
     Returns:
         A new list containing only records whose metadata matches all conditions.
+        Note: the records themselves are the live objects from the store, so
+        editing one here also edits it in the store.
 
     """
     return [r for r in records if matches_filter(r.metadata, filter_dict)]
