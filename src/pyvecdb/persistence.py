@@ -34,6 +34,7 @@ Example:
 import json
 from pathlib import Path
 
+from pyvecdb.atomic import atomic_write_text
 from pyvecdb.record import VectorRecord
 from pyvecdb.store import VectorStore
 
@@ -92,7 +93,7 @@ def save_store(store: VectorStore, path: str | Path) -> None:
     """
     file_path = Path(path)
     data = store_to_dict(store)
-    file_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    atomic_write_text(file_path, json.dumps(data, indent=2))
 
 
 def load_store(path: str | Path) -> VectorStore:
