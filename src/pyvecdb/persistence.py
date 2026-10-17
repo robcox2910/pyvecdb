@@ -33,10 +33,15 @@ Example:
 
 import json
 from pathlib import Path
+from typing import cast
 
 from pyvecdb.atomic import atomic_write_text
+from pyvecdb.errors import PersistenceError
 from pyvecdb.record import VectorRecord
 from pyvecdb.store import VectorStore
+
+# Every real save file has these top-level keys; anything else isn't one of ours.
+_REQUIRED_KEYS = frozenset({"dimensions", "records"})
 
 
 def store_to_dict(
@@ -105,11 +110,30 @@ def load_store(path: str | Path) -> VectorStore:
     Returns:
         A new VectorStore populated with the saved records.
 
+    Raises:
+        PersistenceError: If the file is missing, unreadable, not valid JSON,
+            or not a valid save file.
+
     """
     file_path = Path(path)
-    raw = json.loads(file_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        msg = "JSON root must be an object"
-        raise TypeError(msg)
-    store_data: dict[str, object] = {str(k): v for k, v in raw.items()}  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
-    return dict_to_store(store_data)
+    try:
+        data: object = json.loads(file_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        msg = f"Could not read {file_path}: {exc}"
+        raise PersistenceError(msg) from exc
+    except json.JSONDecodeError as exc:
+        msg = f"Invalid JSON in {file_path}: {exc}"
+        raise PersistenceError(msg) from exc
+    if not isinstance(data, dict):
+        msg = f"{file_path} is not a valid save file: the top level must be an object"
+        raise PersistenceError(msg)
+    saved: dict[str, object] = {str(k): v for k, v in cast("dict[object, object]", data).items()}
+    missing = _REQUIRED_KEYS - saved.keys()
+    if missing:
+        msg = f"{file_path} is not a valid save file: missing {sorted(missing)}"
+        raise PersistenceError(msg)
+    try:
+        return dict_to_store(saved)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        msg = f"{file_path} is not a valid save file: {exc}"
+        raise PersistenceError(msg) from exc

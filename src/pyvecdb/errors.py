@@ -50,3 +50,12 @@ class EmptyVectorError(VecDBError):
 
     A vector needs at least one number -- an empty list isn't a direction!
     """
+
+
+class PersistenceError(VecDBError):
+    """Raise when a saved store can't be read back from disk.
+
+    Like opening your saved game and finding the file missing or
+    scrambled -- rather than starting an empty game and pretending all is
+    well, we stop and say which file is the problem.
+    """
