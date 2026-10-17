@@ -28,6 +28,7 @@ from pyvecdb.errors import (
     DuplicateIDError,
     EmptyStoreError,
     EmptyVectorError,
+    PersistenceError,
     RecordNotFoundError,
     VecDBError,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "DuplicateIDError",
     "EmptyStoreError",
     "EmptyVectorError",
+    "PersistenceError",
     "RecordNotFoundError",
     "VecDBError",
     "VectorRecord",

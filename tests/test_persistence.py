@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from pyvecdb.errors import PersistenceError, VecDBError
 from pyvecdb.persistence import dict_to_store, load_store, save_store, store_to_dict
 from pyvecdb.store import VectorStore
 
@@ -107,7 +108,7 @@ class TestSaveAndLoad:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "bad.json"
             path.write_text("[1, 2, 3]", encoding="utf-8")
-            with pytest.raises(TypeError, match="JSON root must be an object"):
+            with pytest.raises(PersistenceError, match="top level must be an object"):
                 load_store(path)
 
     def test_save_load_string_path(self) -> None:
@@ -154,3 +155,30 @@ def test_interrupted_save_keeps_the_previous_file(
     assert path.read_bytes() == before
     load_store(path)
     assert [p.name for p in tmp_path.iterdir()] == ["data.json"]
+
+
+class TestUnreadableSaveFiles:
+    """A missing or damaged save file raises PersistenceError, naming the file."""
+
+    def test_missing_file_raises_persistence_error(self, tmp_path: Path) -> None:
+        """Loading a file that isn't there is a PersistenceError."""
+        with pytest.raises(PersistenceError, match=r"missing\.json"):
+            load_store(tmp_path / "missing.json")
+
+    def test_bad_json_raises_persistence_error_naming_the_file(self, tmp_path: Path) -> None:
+        """A scribbled-on file is a PersistenceError that names the file."""
+        path = tmp_path / "saved.json"
+        path.write_text("{not json", encoding="utf-8")
+        with pytest.raises(PersistenceError, match=r"saved\.json"):
+            load_store(path)
+
+    def test_wrong_shape_raises_persistence_error(self, tmp_path: Path) -> None:
+        """Valid JSON that isn't a saved store is a PersistenceError."""
+        path = tmp_path / "saved.json"
+        path.write_text('{"something": "else"}', encoding="utf-8")
+        with pytest.raises(PersistenceError, match=r"saved\.json"):
+            load_store(path)
+
+    def test_persistence_error_is_part_of_the_library_errors(self) -> None:
+        """PersistenceError belongs to the library's own family of errors."""
+        assert issubclass(PersistenceError, VecDBError)
