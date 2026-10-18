@@ -162,7 +162,9 @@ class VectorStore:
             DimensionMismatchError: If the new vector has wrong dimensions.
 
         """
-        self.get(record_id)  # raises RecordNotFoundError if it isn't there
+        if record_id not in self._records:
+            msg = f"No record found with ID '{record_id}'"
+            raise RecordNotFoundError(msg)
         record = self._records[record_id]
         if vector is not None:
             self._check_dimensions(vector)
