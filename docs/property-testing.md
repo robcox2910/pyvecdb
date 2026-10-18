@@ -11,8 +11,8 @@ you expected. That's an **example test**. It's useful, but it only tells
 you about the one map you thought of.
 
 Now imagine a pizza scout. All day long the scout draws new maps --
-one shop, forty shops, shops piled on the same corner, shops with no name
-at all, shops named in emoji -- stands somewhere random, asks the app for
+one shop, forty shops, shops piled on one corner, shops named in emoji --
+stands somewhere random, asks the app for
 the nearest few, and then does it the slow way: walks to *every* shop with
 a measuring wheel, writes the distances down, and sorts them. For each map,
 the scout checks a single rule:
@@ -35,14 +35,18 @@ the model check (more on that below) is in `tests/test_model.py`.
 
 ## A Property from PyVecDB
 
-Here's the scout's rule as a test, with the recipes it uses:
+Here's the scout's rule as a test, with the recipes it uses. One recipe,
+shared with the model check, lives in `tests/strategies.py`:
 
 ```python
 def whole_coordinates() -> st.SearchStrategy[float]:
     """Make one small whole number, written as a float, such as -3.0 or 7.0."""
     return st.integers(SMALLEST_COORDINATE, LARGEST_COORDINATE).map(float)
+```
 
+The rest is in `tests/test_properties.py`:
 
+```python
 def shops_on_a_map() -> st.SearchStrategy[dict[str, list[float]]]:
     """Make a map of at least one shop: each ID with a 3D vector of small whole numbers."""
     return st.dictionaries(record_ids(), search_vectors(MAP_DIMENSIONS), min_size=1)
@@ -84,8 +88,7 @@ Line by line:
   the test reads like a sentence.
 - **Why whole numbers?** Adding and multiplying numbers like `3.0` and
   `-7.0` is exact on a computer, so the scout's answer and the app's
-  answer can be compared with `==`. With messy decimals the two could
-  differ in the last digit, and we'd need a "close enough" fudge that
+  answer can be compared with `==`, with no "close enough" fudge that
   might hide a real mistake. Numbers run from -10 to 10, so ties (two
   shops the same distance away) happen all the time.
 - **`search_metrics()`** picks `"euclidean"` (straight line),
@@ -93,8 +96,8 @@ Line by line:
   [the distance page](concepts/distance.md). Cosine similarity divides by
   square roots, so its scores aren't exact, and it refuses an all-zero
   vector, so it isn't in this test.
-- **`@given(...)`** tells Hypothesis to run the test many times (100 in a
-  normal run), each time with a fresh map, spot, `k` and metric.
+- **`@given(...)`** runs the test 100 times in a normal run, each with a
+  fresh map, spot, `k` and metric.
 - **`store_of_shops(shops)`** makes a 3D `VectorStore` holding every shop.
 - **`how_far`** (in `tests/strategies.py`) is the measuring wheel. It is
   *not* PyVecDB's code: it works in whole numbers, so nothing is ever
@@ -106,8 +109,8 @@ Line by line:
   and both answers are right. Comparing distances accepts either winner
   but still catches a wrong one.
 
-Notice what the test *doesn't* say. It never says "from `[2, 2]` the
-nearest is `slice-heaven`". It only needs a rule that's always true.
+Notice what the test *doesn't* say: which shop wins. It only needs a rule
+that's always true.
 
 **A search that does nothing -- hands back an empty list every time --
 fails this straight away**, because the scout's list always has at least
@@ -148,7 +151,6 @@ class VectorStoreMachine(RuleBasedStateMachine):
     ids = Bundle("ids")
 
     def __init__(self) -> None:
-        """Start with an empty 2D store and an empty dict."""
         super().__init__()
         self.store = VectorStore(dimensions=DIMENSIONS)
         self.model: dict[str, tuple[list[float], Metadata]] = {}
@@ -169,6 +171,9 @@ class VectorStoreMachine(RuleBasedStateMachine):
         record = self.store.insert(record_id, mine, my_metadata)
         assert (record.record_id, record.vector, record.metadata) == (record_id, vector, metadata)
         self.model[record_id] = (vector, metadata)
+        # The store keeps its own copy: scribbling on ours afterwards changes nothing.
+        mine.append(99.0)
+        my_metadata["scribble"] = True
         return record_id
 
     @invariant()
@@ -179,10 +184,8 @@ class VectorStoreMachine(RuleBasedStateMachine):
         assert [record.record_id for record in listed] == list(self.model)
         assert [(record.vector, record.metadata) for record in listed] == list(self.model.values())
 
-
 # why: 20 steps find the same bugs; 50 (the default) is most of the run time
 VectorStoreMachine.TestCase.settings = settings(stateful_step_count=20)
-# pytest runs this like any other test class: one run plays 100 random stories.
 TestVectorStoreModel = cast("type[unittest.TestCase]", VectorStoreMachine.TestCase)
 ```
 
@@ -191,18 +194,18 @@ Piece by piece:
 - **`RuleBasedStateMachine`** is Hypothesis's tool for testing things
   that change step by step. Hypothesis makes up a random **story** of
   steps and plays it.
-- **`self.store` and `self.model`** are the app and the notebook. Every
-  story starts with both empty.
+- **`self.store` and `self.model`** are the app and the notebook, both
+  empty at the start.
 - **Each `@rule`** is one kind of step. It does the same thing to the
   store and to the dict, and checks what the store hands back: `insert`
   must return a record with exactly the ID, vector and metadata it was
   given. The real file has rules to insert, insert a vector of the wrong
   size, update, delete, get, insert a batch (all of it or none of it),
   search, clear, and scribble on records that `get` and `knn_search` hand
-  back, to check the store never changes behind its back.
-- **`ids = Bundle("ids")`** is a bag of IDs used earlier in the story.
-  Two random strings hardly ever match, so without it the story would
-  almost never update or delete a record that is really there. `insert`
+  back. `insert` scribbles on the copies it handed in, too: the store must
+  never change behind its back.
+- **`ids = Bundle("ids")`** is a bag of IDs used earlier in the story,
+  so later steps can update or delete a record that is really there. `insert`
   puts its ID in the bag (`target=ids`). It picks its ID with
   `st.one_of(ids, record_ids())`: an old one from the bag *or* a brand-new
   one, so it tries both a fresh ID and one that's already taken.
@@ -255,13 +258,11 @@ E           contents=(1, {'': ([0.0], {}), '0': ([0.0], {})}),
 E       )
 ```
 
-Look at how small that is. A one-dimensional store, two records named
-`''` and `'0'`, both sitting at `[0.0]`, no metadata. You can't swap the
-order of fewer than two records, so this is the smallest store that can
-show the bug. Every record still comes back, with the right vector and
-metadata -- just in the wrong order. Why does order matter? When two shops
-tie, `knn_search` lists the older one first, so a store that loaded
-backwards would quietly change search results.
+Look at how small that is: two records, `''` and `'0'`, both at `[0.0]`.
+You can't swap fewer than two, so this is the smallest store that can
+show the bug. Every record comes back, just in the wrong order -- and
+since `knn_search` lists the older of two tied shops first, that quietly
+changes search results.
 
 Only the round-trip catches it: the junk-file properties only care that
 loading doesn't crash.
@@ -310,7 +311,19 @@ The fix was one line:
 ```
 
 The shrunk input is now an ordinary example test in
-`tests/test_distance.py`, so the bug can't sneak back in.
+`tests/test_distance.py`, so the bug can't sneak back in:
+
+```python
+    def test_too_far_for_a_float_is_infinity_not_a_crash(self) -> None:
+        """Regression: a distance too big for a float is infinity, not an OverflowError."""
+        # Shrunk by test_distance_is_the_same_both_ways: squaring this number
+        # goes past the biggest float there is.
+        huge = [1.3407807929942597e154]
+        assert euclidean_distance([0.0], huge) == math.inf
+        assert euclidean_distance(huge, [0.0]) == math.inf
+        # The same answer magnitude() gives for the distance from zero.
+        assert magnitude(huge) == math.inf
+```
 
 The junk-file properties found a second bug. A save file holding one byte,
 `0x80` (not text at all), made `load_store` crash with
@@ -320,10 +333,11 @@ crashed with `EmptyVectorError`. Every damaged file now gets a
 `PersistenceError` naming it, and the shrunk files are pinned in
 `tests/test_persistence.py`.
 
-A review of the model check found a third: `get`, `insert`, `update` and
-`knn_search` handed back the store's own record, so changing
-`record.vector` quietly changed the store. They now hand back copies, and
-the model's `scribble_on_returned_records` rule checks it.
+A code review found a third: `get`, `insert`, `update`, `list_records`,
+`batch_insert` and `knn_search` handed back the store's own record, so
+changing `record.vector` quietly changed the store. They now hand back
+copies, and we then added the model's `scribble_on_returned_records` rule
+to keep checking it.
 
 ## Run It Yourself
 
