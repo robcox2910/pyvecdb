@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import cast
 
 from pyvecdb.atomic import atomic_write_text
-from pyvecdb.errors import PersistenceError
+from pyvecdb.errors import PersistenceError, VecDBError
 from pyvecdb.record import VectorRecord
 from pyvecdb.store import VectorStore
 
@@ -117,11 +117,18 @@ def load_store(path: str | Path) -> VectorStore:
     """
     file_path = Path(path)
     try:
-        data: object = json.loads(file_path.read_text(encoding="utf-8"))
-    except OSError as exc:
+        raw = file_path.read_text(encoding="utf-8")
+    # A file that isn't UTF-8 text (an image, a zip, a corrupted save) fails
+    # while decoding, not while reading, so it needs catching too.
+    except (OSError, UnicodeDecodeError) as exc:
         msg = f"Could not read {file_path}: {exc}"
         raise PersistenceError(msg) from exc
-    except json.JSONDecodeError as exc:
+    try:
+        data: object = json.loads(raw)
+    # JSONDecodeError is a kind of ValueError; a plain ValueError also means a
+    # number too long for Python to read, and RecursionError means lists or
+    # objects nested too deep. Each one is a file we can't load.
+    except (ValueError, RecursionError) as exc:
         msg = f"Invalid JSON in {file_path}: {exc}"
         raise PersistenceError(msg) from exc
     if not isinstance(data, dict):
@@ -134,6 +141,9 @@ def load_store(path: str | Path) -> VectorStore:
         raise PersistenceError(msg)
     try:
         return dict_to_store(saved)
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+    # OverflowError: a number too big to be a float, or Infinity dimensions.
+    # VecDBError: a record the store itself refuses -- an empty vector, the
+    # wrong number of dimensions, or the same ID twice.
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError, VecDBError) as exc:
         msg = f"{file_path} is not a valid save file: {exc}"
         raise PersistenceError(msg) from exc
