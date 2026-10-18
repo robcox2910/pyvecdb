@@ -128,7 +128,10 @@ class VectorStoreMachine(RuleBasedStateMachine):
             old_metadata if metadata is None else metadata,
         )
         updated = self.store.update(record_id, vector, metadata)
-        assert (updated.vector, updated.metadata) == self.model[record_id]
+        assert (updated.record_id, updated.vector, updated.metadata) == (
+            record_id,
+            *self.model[record_id],
+        )
 
     @rule(record_id=st.one_of(ids, record_ids()))
     def delete(self, record_id: str) -> None:
@@ -167,7 +170,9 @@ class VectorStoreMachine(RuleBasedStateMachine):
         # The invariant below then checks every record against the dict.
 
     @rule(
-        batch=st.lists(st.tuples(record_ids(), st.one_of(map_spots(), wrong_sized_vectors()))),
+        batch=st.lists(
+            st.tuples(st.one_of(ids, record_ids()), st.one_of(map_spots(), wrong_sized_vectors()))
+        ),
     )
     def batch_insert(self, batch: list[tuple[str, list[float]]]) -> None:
         """Insert a whole batch, or -- if any one record is bad -- none of it."""
@@ -181,7 +186,12 @@ class VectorStoreMachine(RuleBasedStateMachine):
             with pytest.raises((DuplicateIDError, DimensionMismatchError)):
                 self.store.batch_insert([(record_id, vector, None) for record_id, vector in batch])
             return
-        self.store.batch_insert([(record_id, vector, None) for record_id, vector in batch])
+        inserted = self.store.batch_insert(
+            [(record_id, vector, None) for record_id, vector in batch]
+        )
+        assert [(record.record_id, record.vector, record.metadata) for record in inserted] == [
+            (record_id, vector, {}) for record_id, vector in batch
+        ]
         for record_id, vector in batch:
             self.model[record_id] = (vector, {})
 
