@@ -82,7 +82,9 @@ def euclidean_distance(a: list[float], b: list[float]) -> float:
     check_not_empty(b)
     check_same_dimensions(a, b)
 
-    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b, strict=False)))
+    # ``d * d`` rather than ``d ** 2``: for a number too big to square, ``**``
+    # raises OverflowError, while ``*`` gives infinity, just like magnitude().
+    return math.sqrt(sum((x - y) * (x - y) for x, y in zip(a, b, strict=False)))
 
 
 def dot_product(a: list[float], b: list[float]) -> float:

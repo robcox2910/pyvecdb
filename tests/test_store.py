@@ -236,3 +236,89 @@ class TestBatchInsert:
             )
         assert store.count == EXPECTED_COUNT_ZERO
         assert not store.contains("a")
+
+
+class TestCopies:
+    """Regression: the store never changes behind the caller's back.
+
+    Records handed out are copies, and vectors and metadata handed in are
+    copied, so scribbling on either side leaves the store as it was.
+    """
+
+    def _store(self) -> VectorStore:
+        store = VectorStore(dimensions=DIMS_TWO)
+        store.insert("a", [1.0, 2.0], metadata={"genre": "rock"})
+        return store
+
+    def _assert_unchanged(self, store: VectorStore) -> None:
+        record = store.get("a")
+        assert record.vector == [1.0, 2.0]
+        assert record.metadata == {"genre": "rock"}
+
+    def test_scribbling_on_a_record_from_get(self) -> None:
+        """Changing the vector or metadata get() returned leaves the store alone."""
+        store = self._store()
+        record = store.get("a")
+        record.vector[0] = 99.0
+        record.metadata["genre"] = "pop"
+        self._assert_unchanged(store)
+
+    def test_scribbling_on_a_record_from_insert(self) -> None:
+        """Changing the record insert() returned leaves the store alone."""
+        store = VectorStore(dimensions=DIMS_TWO)
+        record = store.insert("a", [1.0, 2.0], metadata={"genre": "rock"})
+        record.vector.append(99.0)
+        record.metadata.clear()
+        self._assert_unchanged(store)
+
+    def test_scribbling_on_a_record_from_update(self) -> None:
+        """Changing the record update() returned leaves the store alone."""
+        store = self._store()
+        record = store.update("a", vector=[1.0, 2.0])
+        record.vector[1] = 99.0
+        record.metadata["genre"] = "pop"
+        self._assert_unchanged(store)
+
+    def test_scribbling_on_records_from_list_records(self) -> None:
+        """Changing a record list_records() returned leaves the store alone."""
+        store = self._store()
+        store.list_records()[0].vector[0] = 99.0
+        self._assert_unchanged(store)
+
+    def test_scribbling_on_records_from_batch_insert(self) -> None:
+        """Changing a record batch_insert() returned leaves the store alone."""
+        store = VectorStore(dimensions=DIMS_TWO)
+        [record] = store.batch_insert([("a", [1.0, 2.0], {"genre": "rock"})])
+        record.vector[0] = 99.0
+        self._assert_unchanged(store)
+
+    def test_scribbling_on_what_you_inserted(self) -> None:
+        """Changing the vector or metadata you passed to insert() leaves the store alone."""
+        store = VectorStore(dimensions=DIMS_TWO)
+        vector = [1.0, 2.0]
+        metadata: dict[str, str | int | float | bool] = {"genre": "rock"}
+        store.insert("a", vector, metadata=metadata)
+        vector[0] = 99.0
+        metadata["genre"] = "pop"
+        self._assert_unchanged(store)
+
+    def test_scribbling_on_what_you_updated_with(self) -> None:
+        """Changing the vector or metadata you passed to update() leaves the store alone."""
+        store = VectorStore(dimensions=DIMS_TWO)
+        store.insert("a", [0.0, 0.0])
+        vector = [1.0, 2.0]
+        metadata: dict[str, str | int | float | bool] = {"genre": "rock"}
+        store.update("a", vector=vector, metadata=metadata)
+        vector[0] = 99.0
+        metadata["genre"] = "pop"
+        self._assert_unchanged(store)
+
+    def test_scribbling_on_what_you_batch_inserted(self) -> None:
+        """Changing a vector or metadata you passed to batch_insert() leaves the store alone."""
+        store = VectorStore(dimensions=DIMS_TWO)
+        vector = [1.0, 2.0]
+        metadata: dict[str, str | int | float | bool] = {"genre": "rock"}
+        store.batch_insert([("a", vector, metadata)])
+        vector[0] = 99.0
+        metadata["genre"] = "pop"
+        self._assert_unchanged(store)

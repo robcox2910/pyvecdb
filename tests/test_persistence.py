@@ -182,3 +182,54 @@ class TestUnreadableSaveFiles:
     def test_persistence_error_is_part_of_the_library_errors(self) -> None:
         """PersistenceError belongs to the library's own family of errors."""
         assert issubclass(PersistenceError, VecDBError)
+
+
+class TestJunkSaveFiles:
+    """Regression: files found by the property tests used to crash load_store.
+
+    Each one escaped as some other error instead of a PersistenceError.
+    """
+
+    def test_bytes_that_are_not_text(self, tmp_path: Path) -> None:
+        """A file that isn't UTF-8 text (shrunk to one byte) is a PersistenceError."""
+        path = tmp_path / "saved.json"
+        path.write_bytes(b"\x80")
+        with pytest.raises(PersistenceError, match=r"saved\.json"):
+            load_store(path)
+
+    def test_number_too_long_to_read(self, tmp_path: Path) -> None:
+        """A number with more digits than Python will read is a PersistenceError."""
+        path = tmp_path / "saved.json"
+        path.write_text("9" * 5000, encoding="utf-8")
+        with pytest.raises(PersistenceError, match=r"saved\.json"):
+            load_store(path)
+
+    def test_lists_nested_too_deep(self, tmp_path: Path) -> None:
+        """Lists nested deeper than Python can follow are a PersistenceError."""
+        path = tmp_path / "saved.json"
+        path.write_text("[" * 100_000, encoding="utf-8")
+        with pytest.raises(PersistenceError, match=r"saved\.json"):
+            load_store(path)
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            # Shrunk by the save-shaped JSON property: an empty vector...
+            '{"dimensions": 1, "records": [{"record_id": null, "vector": []}]}',
+            # ...and a vector with the wrong number of dimensions.
+            '{"dimensions": 2, "records": [{"record_id": null, "vector": [0]}]}',
+            # The same record ID twice.
+            '{"dimensions": 1, "records": [{"record_id": "a", "vector": [0]},'
+            ' {"record_id": "a", "vector": [1]}]}',
+            # Infinity can't be a number of dimensions...
+            '{"dimensions": Infinity, "records": []}',
+            # ...and a 400-digit number is too big to be a float.
+            '{"dimensions": 1, "records": [{"record_id": "a", "vector": [1' + "0" * 400 + "]}]}",
+        ],
+    )
+    def test_records_that_cannot_be_loaded(self, tmp_path: Path, document: str) -> None:
+        """A save-shaped file whose records can't go back in a store is a PersistenceError."""
+        path = tmp_path / "saved.json"
+        path.write_text(document, encoding="utf-8")
+        with pytest.raises(PersistenceError, match=r"saved\.json"):
+            load_store(path)

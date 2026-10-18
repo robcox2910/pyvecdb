@@ -32,6 +32,19 @@ from pyvecdb.errors import (
 from pyvecdb.record import VectorRecord
 
 
+def _copy(record: VectorRecord) -> VectorRecord:
+    """Return a copy of *record* with its own vector and metadata.
+
+    The store only ever hands out copies, like a library that lends you a
+    photocopy: scribble on it all you like, the original stays clean.
+    """
+    return VectorRecord(
+        record_id=record.record_id,
+        vector=list(record.vector),
+        metadata=dict(record.metadata),
+    )
+
+
 class VectorStore:
     """A container that stores vector records with the same dimensionality.
 
@@ -90,7 +103,7 @@ class VectorStore:
             metadata: Optional key-value pairs of extra information.
 
         Returns:
-            The newly created VectorRecord.
+            A copy of the newly created VectorRecord.
 
         Raises:
             DuplicateIDError: If a record with this ID already exists.
@@ -107,7 +120,7 @@ class VectorStore:
             metadata=dict(metadata) if metadata is not None else {},
         )
         self._records[record_id] = record
-        return record
+        return _copy(record)
 
     def get(self, record_id: str) -> VectorRecord:
         """Get a record by its ID.
@@ -116,7 +129,8 @@ class VectorStore:
             record_id: The ID of the record to retrieve.
 
         Returns:
-            The matching VectorRecord.
+            A copy of the matching VectorRecord. Changing the copy doesn't
+            change the store; use ``update`` for that.
 
         Raises:
             RecordNotFoundError: If no record with this ID exists.
@@ -125,7 +139,7 @@ class VectorStore:
         if record_id not in self._records:
             msg = f"No record found with ID '{record_id}'"
             raise RecordNotFoundError(msg)
-        return self._records[record_id]
+        return _copy(self._records[record_id])
 
     def update(
         self,
@@ -141,20 +155,23 @@ class VectorStore:
             metadata: New metadata (optional -- keeps old if not provided).
 
         Returns:
-            The updated VectorRecord.
+            A copy of the updated VectorRecord.
 
         Raises:
             RecordNotFoundError: If no record with this ID exists.
             DimensionMismatchError: If the new vector has wrong dimensions.
 
         """
-        record = self.get(record_id)
+        if record_id not in self._records:
+            msg = f"No record found with ID '{record_id}'"
+            raise RecordNotFoundError(msg)
+        record = self._records[record_id]
         if vector is not None:
             self._check_dimensions(vector)
             record.vector = list(vector)
         if metadata is not None:
             record.metadata = dict(metadata)
-        return record
+        return _copy(record)
 
     def delete(self, record_id: str) -> None:
         """Remove a record from the store.
@@ -175,10 +192,10 @@ class VectorStore:
         """Return all records in the store as a list.
 
         Returns:
-            A list of all VectorRecord objects in insertion order.
+            Copies of all the VectorRecord objects, in insertion order.
 
         """
-        return list(self._records.values())
+        return [_copy(record) for record in self._records.values()]
 
     def contains(self, record_id: str) -> bool:
         """Check whether a record with the given ID exists.
@@ -206,7 +223,7 @@ class VectorStore:
             records: A list of (record_id, vector, metadata) tuples.
 
         Returns:
-            A list of the newly created VectorRecord objects.
+            Copies of the newly created VectorRecord objects.
 
         This is all-or-nothing: if *any* record is invalid, nothing is inserted
         and the store is left exactly as it was -- like a shopping cart that

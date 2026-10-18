@@ -47,6 +47,7 @@ nav:
   - "Search: Finding the 5 Closest Pizza Shops": concepts/search.md
   - "Similarity: Finding Your Musical Twin": concepts/similarity.md
   - "Vectors: Coordinates on a Treasure Map": concepts/vectors.md
+  - Property Testing: property-testing.md
   # series-nav:start
   - The series:
       - Series home: https://robcox2910.github.io/
