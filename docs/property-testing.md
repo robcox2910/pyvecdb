@@ -22,10 +22,9 @@ the scout checks a single rule:
 That rule is a **property**. It doesn't say which shop should win on any
 one map. It says something that must be true for *every* map.
 
-When the scout finds a map that breaks the rule, they don't just report
-"something went wrong on that huge map from this morning". They rub out
-shops one at a time, and move the rest closer to the middle, checking it
-still goes wrong each time, until the map is as simple as it can be. That
+When the scout finds a map that breaks the rule, they rub out shops one
+at a time, and move the rest closer to the middle, checking it still goes
+wrong each time, until the map is as simple as it can be. That
 boiling-down is called **shrinking**, and it's the best part: the smallest
 failing map usually points straight at the bug.
 
@@ -88,7 +87,7 @@ Line by line:
   answer can be compared with `==`. With messy decimals the two could
   differ in the last digit, and we'd need a "close enough" fudge that
   might hide a real mistake. Numbers run from -10 to 10, so ties (two
-  shops the same distance away) happen all the time. That's on purpose.
+  shops the same distance away) happen all the time.
 - **`search_metrics()`** picks `"euclidean"` (straight line),
   `"manhattan"` (city blocks) or `"dot"` (agreement) from
   [the distance page](concepts/distance.md). Cosine similarity divides by
@@ -96,22 +95,19 @@ Line by line:
   vector, so it isn't in this test.
 - **`@given(...)`** tells Hypothesis to run the test many times (100 in a
   normal run), each time with a fresh map, spot, `k` and metric.
-- **`store_of_shops(shops)`** is a small helper that makes a 3D
-  `VectorStore` and inserts every shop.
+- **`store_of_shops(shops)`** makes a 3D `VectorStore` holding every shop.
 - **`how_far`** (in `tests/strategies.py`) is the measuring wheel. It is
   *not* PyVecDB's code: it works in whole numbers, so nothing is ever
   rounded, and it says "smaller is nearer" for every metric. `sorted(...)`
-  then lines up every shop's distance, nearest first. That's the scout's
-  list.
+  lines up every shop's distance, nearest first: the scout's list.
 - **The first `assert`** says no shop comes back twice.
 - **The second `assert`** is the rule itself. It compares *distances*,
   not names. If two shops tie for nearest, the app may pick either one,
-  and both answers are right. Comparing IDs would fail on a correct app;
-  comparing distances accepts either winner but still catches a wrong one.
+  and both answers are right. Comparing distances accepts either winner
+  but still catches a wrong one.
 
 Notice what the test *doesn't* say. It never says "from `[2, 2]` the
-nearest is `slice-heaven`". It doesn't need to know any answers. It only
-needs a rule that's always true.
+nearest is `slice-heaven`". It only needs a rule that's always true.
 
 **A search that does nothing -- hands back an empty list every time --
 fails this straight away**, because the scout's list always has at least
@@ -127,9 +123,9 @@ PyVecDB has five more properties:
 | Whatever bytes are in the file, loading gives a store or a `PersistenceError`, never another error | `test_any_bytes_on_disk_load_or_raise_persistence_error` |
 | Whatever is inside a save-shaped JSON file, loading gives a store or a `PersistenceError` | `test_any_save_shaped_json_load_or_raise_persistence_error` |
 
-The last two are about damaged save files. A program using PyVecDB writes
-`except PersistenceError:` to handle one; if some other error sneaks out,
-that program crashes instead.
+The last two matter because a program using PyVecDB writes
+`except PersistenceError:` to handle a damaged save file; any other error
+crashes it.
 
 ## Checking Against a Model
 
@@ -202,8 +198,8 @@ Piece by piece:
   must return a record with exactly the ID, vector and metadata it was
   given. The real file has rules to insert, insert a vector of the wrong
   size, update, delete, get, insert a batch (all of it or none of it),
-  search, and clear. The real `insert` also scribbles on its own copy of
-  the vector afterwards, to check the store kept a copy of its own.
+  search, clear, and scribble on records that `get` and `knn_search` hand
+  back, to check the store never changes behind its back.
 - **`ids = Bundle("ids")`** is a bag of IDs used earlier in the story.
   Two random strings hardly ever match, so without it the story would
   almost never update or delete a record that is really there. `insert`
@@ -217,8 +213,7 @@ Piece by piece:
   that pytest can find and run. One run plays 100 random stories, each up
   to 20 steps long.
 
-The `search` rule uses the same measuring wheel as the property above:
-it measures every vector in the notebook and sorts.
+The `search` rule uses the same measuring wheel as the property above.
 
 The `dict` is a good model because it's obviously right and it's *not*
 `VectorStore`'s code. If we built the model by copying `VectorStore`, any
@@ -268,8 +263,8 @@ metadata -- just in the wrong order. Why does order matter? When two shops
 tie, `knn_search` lists the older one first, so a store that loaded
 backwards would quietly change search results.
 
-Only the round-trip catches it. The other properties never save a file,
-and the junk-file properties only care that loading doesn't crash.
+Only the round-trip catches it: the junk-file properties only care that
+loading doesn't crash.
 
 **The example tests all still pass. Only the property notices.** The
 example round-trip loads two records and checks them by ID with
@@ -295,8 +290,7 @@ E       distance=euclidean_distance,
 E   )
 ```
 
-The rule was about symmetry, but the test never got that far: measuring
-from `[0.0]` to one very big number crashed.
+Measuring from `[0.0]` to one very big number crashed.
 
 Here's why. The biggest float Python has is about `1.8e308`, and
 `1.34e154` squared is just past it. The old code squared each difference
@@ -305,10 +299,9 @@ is too big. Plain `*` gives `inf` (infinity) instead -- and that's what
 `magnitude()`, `manhattan_distance` and `dot_product` already did. So
 `euclidean_distance` was the odd one out.
 
-The example tests used friendly vectors like `[3.0, 4.0]`. Nobody thinks
-to measure a distance of 10^154. The scout didn't need to think of it:
-`st.floats()` tries huge numbers all the time, and shrinking walked it
-down to the smallest one that breaks.
+The example tests used friendly vectors like `[3.0, 4.0]`. The scout
+didn't need to think of huge ones: `st.floats()` tries them all the time,
+and shrinking found the smallest one that breaks.
 
 The fix was one line:
 
@@ -326,6 +319,11 @@ The junk-file properties found a second bug. A save file holding one byte,
 crashed with `EmptyVectorError`. Every damaged file now gets a
 `PersistenceError` naming it, and the shrunk files are pinned in
 `tests/test_persistence.py`.
+
+A review of the model check found a third: `get`, `insert`, `update` and
+`knn_search` handed back the store's own record, so changing
+`record.vector` quietly changed the store. They now hand back copies, and
+the model's `scribble_on_returned_records` rule checks it.
 
 ## Run It Yourself
 
