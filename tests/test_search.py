@@ -164,3 +164,14 @@ class TestBatchSearch:
         assert len(results) == EXPECTED_TWO
         assert len(results[0]) == EXPECTED_ONE
         assert results[0][0][0].record_id == "a"
+
+
+def test_scribbling_on_a_search_result_leaves_the_store_alone() -> None:
+    """Regression: changing a record knn_search returned doesn't change the stored one."""
+    store = VectorStore(dimensions=2)
+    store.insert("a", [1.0, 0.0], metadata={"genre": "rock"})
+    [(record, _score)] = knn_search(store, query=[1.0, 0.0], k=1)
+    record.vector[0] = 99.0
+    record.metadata["genre"] = "pop"
+    assert store.get("a").vector == [1.0, 0.0]
+    assert store.get("a").metadata == {"genre": "rock"}

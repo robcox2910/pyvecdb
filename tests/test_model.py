@@ -152,6 +152,20 @@ class VectorStoreMachine(RuleBasedStateMachine):
         assert record.record_id == record_id
         assert (record.vector, record.metadata) == self.model[record_id]
 
+    @rule(record_id=ids, query=map_spots())
+    def scribble_on_returned_records(self, record_id: str, query: list[float]) -> None:
+        """Scribble on records that get() and knn_search() hand back: the store must not change."""
+        if record_id not in self.model:
+            return
+        handed_back = [self.store.get(record_id)]
+        handed_back += [
+            record for record, _score in knn_search(self.store, query, k=1, metric="euclidean")
+        ]
+        for record in handed_back:
+            record.vector.append(99.0)
+            record.metadata["scribble"] = True
+        # The invariant below then checks every record against the dict.
+
     @rule(
         batch=st.lists(st.tuples(record_ids(), st.one_of(map_spots(), wrong_sized_vectors()))),
     )
