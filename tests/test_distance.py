@@ -11,6 +11,7 @@ from pyvecdb.distance import (
     manhattan_distance,
 )
 from pyvecdb.errors import DimensionMismatchError, EmptyVectorError
+from pyvecdb.vector import magnitude
 
 # Named constants
 UNIT_X = [1.0, 0.0]
@@ -88,6 +89,16 @@ class TestEuclideanDistance:
         """Raise EmptyVectorError for empty input."""
         with pytest.raises(EmptyVectorError):
             euclidean_distance([], [])
+
+    def test_too_far_for_a_float_is_infinity_not_a_crash(self) -> None:
+        """Regression: a distance too big for a float is infinity, not an OverflowError."""
+        # Shrunk by test_distance_is_the_same_both_ways: squaring this number
+        # goes past the biggest float there is.
+        huge = [1.3407807929942597e154]
+        assert euclidean_distance([0.0], huge) == math.inf
+        assert euclidean_distance(huge, [0.0]) == math.inf
+        # The same answer magnitude() gives for the distance from zero.
+        assert magnitude(huge) == math.inf
 
 
 class TestDotProduct:
