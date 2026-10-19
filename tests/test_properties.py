@@ -180,11 +180,19 @@ COLOURS = ("red", "green", "blue")
 MOST_SIZE = 3
 
 
+def sizes(lowest: int = 0, highest: int = MOST_SIZE) -> st.SearchStrategy[int | float]:
+    """Make a size that is a whole number or a half (such as 2 or 2.5): both are exact floats."""
+    return st.one_of(
+        st.integers(lowest, highest),
+        st.integers(2 * lowest, 2 * highest).map(lambda twice: twice / 2),
+    )
+
+
 def tagged_shops() -> st.SearchStrategy[dict[str, tuple[list[float], dict[str, MetadataValue]]]]:
     """Make at least one shop: each ID with a 3D spot and maybe a colour and a size."""
     fields: dict[str, st.SearchStrategy[MetadataValue]] = {
         "colour": st.sampled_from(COLOURS),
-        "size": st.integers(0, MOST_SIZE),
+        "size": sizes(),
     }
     # Most shops have both tags; some miss one or both, and must never match.
     tags = st.one_of(
@@ -214,7 +222,7 @@ def conditions_on(values: st.SearchStrategy[MetadataValue]) -> st.SearchStrategy
 def filter_conditions() -> st.SearchStrategy[MetadataFilter]:
     """Make a filter on colour and/or size, mostly with the right kind of value for the field."""
     colour = st.sampled_from(COLOURS)
-    size = st.integers(-1, MOST_SIZE + 1)
+    size = sizes(-1, MOST_SIZE + 1)
     # Now and then the wrong kind (a colour asked to be "greater than" 3) must match nothing.
     on_size = conditions_on(st.one_of(size, size, size, colour))
     on_colour = conditions_on(st.one_of(colour, colour, colour, size))
@@ -233,8 +241,9 @@ def passes(actual: MetadataValue, operator_name: str, expected: object) -> bool:
         return actual != expected
     if operator_name == "$in":
         return isinstance(expected, list) and actual in expected
-    # The four comparisons only make sense between two numbers.
-    if not isinstance(actual, int) or not isinstance(expected, int):
+    # The four comparisons only make sense between two numbers, whole or decimal.
+    numbers = (int, float)
+    if not isinstance(actual, numbers) or not isinstance(expected, numbers):
         return False
     return {
         "$gt": actual > expected,
@@ -340,28 +349,28 @@ def test_batch_search_is_one_knn_search_per_query(
 
 
 @given(
-    sizes=st.dictionaries(record_ids(), st.integers(0, MOST_SIZE), min_size=1, max_size=6),
+    shop_sizes=st.dictionaries(record_ids(), sizes(), min_size=1, max_size=6),
     operator_name=st.sampled_from(["$gt", "$gte", "$lt", "$lte"]),
-    line=st.integers(0, MOST_SIZE),
+    line=sizes(),
     query=where_you_stand(),
 )
 def test_size_comparisons_keep_exactly_the_right_shops(
-    sizes: dict[str, int], operator_name: str, line: int, query: list[float]
+    shop_sizes: dict[str, int | float], operator_name: str, line: int | float, query: list[float]
 ) -> None:
-    """Asking for every shop with a size over/under a line returns exactly those, ties on the line included or not."""
+    """A size comparison keeps exactly the shops on the right side of the line."""
     compare = {"$gt": operator.gt, "$gte": operator.ge, "$lt": operator.lt, "$lte": operator.le}
     store = VectorStore(dimensions=MAP_DIMENSIONS)
-    for shop_id, size in sizes.items():
+    for shop_id, size in shop_sizes.items():
         store.insert(shop_id, [0.0] * MAP_DIMENSIONS, {"size": size})
     results = knn_search(
         store,
         query,
-        k=len(sizes),
+        k=len(shop_sizes),
         metric="manhattan",
         metadata_filter={"size": {operator_name: line}},
     )
     found = {record.record_id for record, _score in results}
-    assert found == {s for s, size in sizes.items() if compare[operator_name](size, line)}
+    assert found == {s for s, size in shop_sizes.items() if compare[operator_name](size, line)}
 
 
 @given(shops=shops_on_a_map(), query=where_you_stand(), metric=search_metrics())
@@ -417,7 +426,7 @@ def test_save_then_load_gives_back_the_same_store(contents: tuple[int, Records])
 
 @given(junk=any_bytes())
 def test_any_bytes_on_disk_load_or_raise_persistence_error(junk: bytes) -> None:
-    """Whatever bytes are in the file, loading gives a store or a PersistenceError, never another error."""
+    """Whatever bytes are in the file, loading gives a store or a PersistenceError, nothing else."""
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "store.json"
         path.write_bytes(junk)
