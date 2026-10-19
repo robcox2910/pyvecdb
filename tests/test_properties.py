@@ -18,18 +18,20 @@ The step-by-step check of ``VectorStore`` against a plain dict lives in
 
 import json
 import math
+import operator
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from hypothesis import given
 from hypothesis import strategies as st
 
 from pyvecdb.distance import dot_product, euclidean_distance, manhattan_distance
 from pyvecdb.errors import PersistenceError
-from pyvecdb.filtering import MetadataValue
+from pyvecdb.filtering import FilterCondition, MetadataFilter, MetadataValue
 from pyvecdb.persistence import load_store, save_store
-from pyvecdb.search import knn_search
+from pyvecdb.search import batch_search, knn_search
 from pyvecdb.store import VectorStore
 from tests.strategies import (
     any_metadata,
@@ -171,6 +173,97 @@ def store_of_shops(shops: dict[str, list[float]]) -> VectorStore:
     return store
 
 
+# --- Filtered search: shops with a colour and a size --------------------------
+# Metadata for the filter properties is a small, fixed shape so that filters
+# match some shops and miss others, instead of almost never matching.
+COLOURS = ("red", "green", "blue")
+MOST_SIZE = 3
+
+
+def sizes(lowest: int = 0, highest: int = MOST_SIZE) -> st.SearchStrategy[int | float]:
+    """Make a size that is a whole number or a half (such as 2 or 2.5): both are exact floats."""
+    return st.one_of(
+        st.integers(lowest, highest),
+        st.integers(2 * lowest, 2 * highest).map(lambda twice: twice / 2),
+    )
+
+
+def tagged_shops() -> st.SearchStrategy[dict[str, tuple[list[float], dict[str, MetadataValue]]]]:
+    """Make at least one shop: each ID with a 3D spot and maybe a colour and a size."""
+    fields: dict[str, st.SearchStrategy[MetadataValue]] = {
+        "colour": st.sampled_from(COLOURS),
+        "size": sizes(),
+    }
+    # Most shops have both tags; some miss one or both, and must never match.
+    tags = st.one_of(
+        st.fixed_dictionaries(fields),
+        st.fixed_dictionaries(fields),
+        st.fixed_dictionaries({}, optional=fields),
+    )
+    return st.dictionaries(
+        record_ids(), st.tuples(search_vectors(MAP_DIMENSIONS), tags), min_size=1, max_size=5
+    )
+
+
+def conditions_on(values: st.SearchStrategy[MetadataValue]) -> st.SearchStrategy[FilterCondition]:
+    """Make one condition: a plain value, one operator, two operators, or "in a list"."""
+    operators = st.sampled_from(["$eq", "$ne", "$gt", "$gte", "$lt", "$lte"])
+    conditions = st.one_of(
+        values,
+        st.dictionaries(operators, values, min_size=1, max_size=1),
+        st.dictionaries(operators, values, min_size=1, max_size=1),
+        st.dictionaries(operators, values, min_size=2, max_size=2),
+        st.fixed_dictionaries({"$in": st.lists(values, max_size=3)}),
+    )
+    # Hypothesis builds dicts pyright can't see as FilterCondition (dict values are invariant).
+    return cast("st.SearchStrategy[FilterCondition]", conditions)
+
+
+def filter_conditions() -> st.SearchStrategy[MetadataFilter]:
+    """Make a filter on colour and/or size, mostly with the right kind of value for the field."""
+    colour = st.sampled_from(COLOURS)
+    size = sizes(-1, MOST_SIZE + 1)
+    # Now and then the wrong kind (a colour asked to be "greater than" 3) must match nothing.
+    on_size = conditions_on(st.one_of(size, size, size, colour))
+    on_colour = conditions_on(st.one_of(colour, colour, colour, size))
+    return st.one_of(
+        st.fixed_dictionaries({"size": on_size}),
+        st.fixed_dictionaries({"colour": on_colour}),
+        st.fixed_dictionaries({"colour": on_colour, "size": on_size}),
+    )
+
+
+def passes(actual: MetadataValue, operator_name: str, expected: object) -> bool:
+    """Say whether one value passes one operator: written out by hand, not PyVecDB's code."""
+    if operator_name == "$eq":
+        return actual == expected
+    if operator_name == "$ne":
+        return actual != expected
+    if operator_name == "$in":
+        return isinstance(expected, list) and actual in expected
+    # The four comparisons only make sense between two numbers, whole or decimal.
+    numbers = (int, float)
+    if not isinstance(actual, numbers) or not isinstance(expected, numbers):
+        return False
+    return {
+        "$gt": actual > expected,
+        "$gte": actual >= expected,
+        "$lt": actual < expected,
+        "$lte": actual <= expected,
+    }[operator_name]
+
+
+def shop_passes(tags: dict[str, MetadataValue], wanted: MetadataFilter) -> bool:
+    """Say whether a shop's tags pass every condition; a missing field never passes."""
+    for field, condition in wanted.items():
+        if field not in tags:
+            return False
+        operators = condition if isinstance(condition, dict) else {"$eq": condition}
+        if not all(passes(tags[field], op, expected) for op, expected in operators.items()):
+            return False
+    return True
+
+
 def load_or_refuse(path: Path) -> None:
     """Load the store at ``path``, accepting only a PersistenceError refusal.
 
@@ -200,6 +293,84 @@ def test_top_k_matches_a_brute_force_sort(
     # Compare distances, not IDs: two shops the same distance away are a tie,
     # and either one may come first.
     assert [how_far(shops[shop_id], query, metric) for shop_id in found] == every_distance[:k]
+
+
+@given(
+    shops=tagged_shops(),
+    wanted=filter_conditions(),
+    query=where_you_stand(),
+    k=how_many_to_find(),
+    metric=search_metrics(),
+)
+def test_filtered_top_k_matches_a_brute_force_sort_of_the_matching_shops(
+    shops: dict[str, tuple[list[float], dict[str, MetadataValue]]],
+    wanted: MetadataFilter,
+    query: list[float],
+    k: int,
+    metric: str,
+) -> None:
+    """A filtered knn_search finds the nearest shops among only those whose tags match."""
+    store = VectorStore(dimensions=MAP_DIMENSIONS)
+    for shop_id, (vector, tags) in shops.items():
+        store.insert(shop_id, vector, tags)
+    results = knn_search(store, query, k=k, metric=metric, metadata_filter=wanted)
+    found = [record.record_id for record, _score in results]
+    matching = {s: v for s, (v, tags) in shops.items() if shop_passes(tags, wanted)}
+    every_distance = sorted(how_far(vector, query, metric) for vector in matching.values())
+    assert len(set(found)) == len(found)
+    assert set(found) <= set(matching)
+    assert [how_far(matching[shop_id], query, metric) for shop_id in found] == every_distance[:k]
+
+
+@given(
+    shops=tagged_shops(),
+    wanted=st.one_of(st.none(), filter_conditions()),
+    queries=st.lists(where_you_stand(), max_size=4),
+    k=how_many_to_find(),
+    metric=search_metrics(),
+)
+def test_batch_search_is_one_knn_search_per_query(
+    shops: dict[str, tuple[list[float], dict[str, MetadataValue]]],
+    wanted: MetadataFilter | None,
+    queries: list[list[float]],
+    k: int,
+    metric: str,
+) -> None:
+    """batch_search gives, for each query, exactly what knn_search gives for it alone."""
+    store = VectorStore(dimensions=MAP_DIMENSIONS)
+    for shop_id, (vector, tags) in shops.items():
+        store.insert(shop_id, vector, tags)
+    batched = batch_search(store, queries, k=k, metric=metric, metadata_filter=wanted)
+    alone = [knn_search(store, q, k=k, metric=metric, metadata_filter=wanted) for q in queries]
+    assert len(batched) == len(queries)
+    assert [[(r.record_id, score) for r, score in each] for each in batched] == [
+        [(r.record_id, score) for r, score in each] for each in alone
+    ]
+
+
+@given(
+    shop_sizes=st.dictionaries(record_ids(), sizes(), min_size=1, max_size=6),
+    operator_name=st.sampled_from(["$gt", "$gte", "$lt", "$lte"]),
+    line=sizes(),
+    query=where_you_stand(),
+)
+def test_size_comparisons_keep_exactly_the_right_shops(
+    shop_sizes: dict[str, int | float], operator_name: str, line: int | float, query: list[float]
+) -> None:
+    """A size comparison keeps exactly the shops on the right side of the line."""
+    compare = {"$gt": operator.gt, "$gte": operator.ge, "$lt": operator.lt, "$lte": operator.le}
+    store = VectorStore(dimensions=MAP_DIMENSIONS)
+    for shop_id, size in shop_sizes.items():
+        store.insert(shop_id, [0.0] * MAP_DIMENSIONS, {"size": size})
+    results = knn_search(
+        store,
+        query,
+        k=len(shop_sizes),
+        metric="manhattan",
+        metadata_filter={"size": {operator_name: line}},
+    )
+    found = {record.record_id for record, _score in results}
+    assert found == {s for s, size in shop_sizes.items() if compare[operator_name](size, line)}
 
 
 @given(shops=shops_on_a_map(), query=where_you_stand(), metric=search_metrics())
@@ -255,7 +426,7 @@ def test_save_then_load_gives_back_the_same_store(contents: tuple[int, Records])
 
 @given(junk=any_bytes())
 def test_any_bytes_on_disk_load_or_raise_persistence_error(junk: bytes) -> None:
-    """Whatever bytes are in the file, loading gives a store or a PersistenceError, never another error."""
+    """Whatever bytes are in the file, loading gives a store or a PersistenceError, nothing else."""
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "store.json"
         path.write_bytes(junk)

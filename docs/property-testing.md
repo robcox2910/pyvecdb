@@ -116,11 +116,14 @@ that's always true.
 fails this straight away**, because the scout's list always has at least
 one shop on it.
 
-PyVecDB has five more properties:
+PyVecDB has eight more properties:
 
 | Rule | Test |
 |---|---|
 | Every score `knn_search` reports is that shop's real distance (made negative for distances) | `test_scores_are_the_real_distances` |
+| A filtered `knn_search` finds the nearest of only the shops whose tags match (the matching is worked out separately, by hand) | `test_filtered_top_k_matches_a_brute_force_sort_of_the_matching_shops` |
+| Asking for sizes over, under, or at least/most a line keeps exactly the right shops, including those sitting on the line | `test_size_comparisons_keep_exactly_the_right_shops` |
+| `batch_search` gives, for each query, exactly what `knn_search` gives for it alone, with or without a filter | `test_batch_search_is_one_knn_search_per_query` |
 | Measuring from a to b gives exactly the same answer as measuring from b to a | `test_distance_is_the_same_both_ways` |
 | Loading a saved store gives back the same dimensions and records, in the same order | `test_save_then_load_gives_back_the_same_store` |
 | Whatever bytes are in the file, loading gives a store or a `PersistenceError`, never another error | `test_any_bytes_on_disk_load_or_raise_persistence_error` |
@@ -184,8 +187,9 @@ class VectorStoreMachine(RuleBasedStateMachine):
         assert [record.record_id for record in listed] == list(self.model)
         assert [(record.vector, record.metadata) for record in listed] == list(self.model.values())
 
-# why: 20 steps find the same bugs; 50 (the default) is most of the run time
-VectorStoreMachine.TestCase.settings = settings(stateful_step_count=20)
+# why: 12 steps catch every bug we planted in the store; 50 (the default) took about
+# 5.6 s, nearly all of the model's time. Each short story is also cheaper to shrink.
+VectorStoreMachine.TestCase.settings = settings(stateful_step_count=12)
 TestVectorStoreModel = cast("type[unittest.TestCase]", VectorStoreMachine.TestCase)
 ```
 
@@ -200,7 +204,7 @@ Piece by piece:
   store and to the dict, and checks what the store hands back: `insert`
   must return a record with exactly the ID, vector and metadata it was
   given. The real file has rules to insert, insert a vector of the wrong
-  size, update, delete, get, insert a batch (all of it or none of it),
+  size, update, delete, get, insert a batch (all of it or none of it, including batches built to put the bad record last),
   search, clear, and scribble on records that `get` and `knn_search` hand
   back. `insert` scribbles on the copies it handed in, too: the store must
   never change behind its back.
@@ -214,7 +218,7 @@ Piece by piece:
   and metadata.
 - **`TestVectorStoreModel = ...TestCase`** turns the machine into a test
   that pytest can find and run. One run plays 100 random stories, each up
-  to 20 steps long.
+  to 12 steps long.
 
 The `search` rule uses the same measuring wheel as the property above.
 
