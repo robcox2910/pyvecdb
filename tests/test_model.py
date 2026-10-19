@@ -26,7 +26,7 @@ from typing import cast
 import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
-from hypothesis.stateful import Bundle, RuleBasedStateMachine, invariant, rule
+from hypothesis.stateful import Bundle, RuleBasedStateMachine, invariant, precondition, rule
 
 from pyvecdb.errors import (
     DimensionMismatchError,
@@ -48,6 +48,9 @@ from tests.strategies import (
 # Every story uses a 2D store: a flat map, like a real pizza-shop map.
 DIMENSIONS = 2
 
+# Batches stay short: three records show every all-or-nothing case, and big ones only slow the run.
+MOST_IN_A_BATCH = 3
+
 Metadata = dict[str, MetadataValue]
 
 
@@ -64,6 +67,41 @@ def wrong_sized_vectors() -> st.SearchStrategy[list[float]]:
 def maybe_metadata() -> st.SearchStrategy[Metadata | None]:
     """Make new metadata, or None for "leave the metadata alone"."""
     return st.one_of(st.none(), any_metadata())
+
+
+Record = tuple[str, list[float]]
+Batch = list[Record]
+
+
+def good_records() -> st.SearchStrategy[Batch]:
+    """Make a short list of (ID, vector) pairs with brand-new IDs and the right-sized vectors."""
+    return st.lists(st.tuples(record_ids(), map_spots()), max_size=MOST_IN_A_BATCH)
+
+
+def mixed_batches(ids_to_use: st.SearchStrategy[str]) -> st.SearchStrategy[Batch]:
+    """Make a short batch of IDs from ``ids_to_use``, with the odd wrong-sized vector."""
+    return st.lists(
+        st.tuples(ids_to_use, st.one_of(map_spots(), wrong_sized_vectors())),
+        max_size=MOST_IN_A_BATCH,
+    )
+
+
+@st.composite
+def batches_with_one_bad_record(draw: st.DrawFn, bad: st.SearchStrategy[Record]) -> Batch:
+    """Make a batch of good records with one record drawn from ``bad`` somewhere in it."""
+    # A random batch rarely puts the bad record *after* good ones, and that is the case
+    # where a missing check leaves half a batch behind instead of refusing all of it.
+    before, after = draw(good_records()), draw(good_records())
+    return [*before, draw(bad), *after]
+
+
+@st.composite
+def batches_repeating_an_id(draw: st.DrawFn) -> Batch:
+    """Make a batch of good records where one ID comes twice."""
+    # Likewise, a fresh ID repeated inside one batch is rare by luck alone.
+    batch = draw(good_records().filter(bool))
+    which = draw(st.integers(min_value=0, max_value=len(batch) - 1))
+    return [*batch, (batch[which][0], draw(map_spots()))]
 
 
 # --- The machine: one story, played on the store and on a dict ----------------
@@ -127,7 +165,11 @@ class VectorStoreMachine(RuleBasedStateMachine):
             old_vector if vector is None else vector,
             old_metadata if metadata is None else metadata,
         )
-        updated = self.store.update(record_id, vector, metadata)
+        mine = None if vector is None else list(vector)
+        updated = self.store.update(record_id, mine, metadata)
+        if mine is not None:
+            # The store keeps its own copy: scribbling on ours afterwards changes nothing.
+            mine.append(99.0)
         assert (updated.record_id, updated.vector, updated.metadata) == (
             record_id,
             *self.model[record_id],
@@ -169,13 +211,35 @@ class VectorStoreMachine(RuleBasedStateMachine):
             record.metadata["scribble"] = True
         # The invariant below then checks every record against the dict.
 
+    @precondition(lambda self: bool(self.model))
     @rule(
-        batch=st.lists(
-            st.tuples(st.one_of(ids, record_ids()), st.one_of(map_spots(), wrong_sized_vectors()))
-        ),
+        before=good_records(),
+        which=st.integers(min_value=0),
+        vector=map_spots(),
+        after=good_records(),
     )
-    def batch_insert(self, batch: list[tuple[str, list[float]]]) -> None:
+    def batch_insert_over_a_used_id(
+        self, before: Batch, which: int, vector: list[float], after: Batch
+    ) -> None:
+        """Insert a batch with an ID the store really holds, after other good records."""
+        # Picked from the dict, so the ID is certainly taken. A missing "already in the
+        # store" check would insert `before` and only then fail, leaving half a batch.
+        taken = list(self.model)[which % len(self.model)]
+        self.insert_batch([*before, (taken, vector), *after])
+
+    @rule(
+        batch=st.one_of(
+            mixed_batches(st.one_of(ids, record_ids())),
+            batches_with_one_bad_record(st.tuples(record_ids(), wrong_sized_vectors())),
+            batches_repeating_an_id(),
+        )
+    )
+    def batch_insert(self, batch: Batch) -> None:
         """Insert a whole batch, or -- if any one record is bad -- none of it."""
+        self.insert_batch(batch)
+
+    def insert_batch(self, batch: Batch) -> None:
+        """Insert ``batch`` in the store and the dict, or check the store refuses all of it."""
         ids_in_batch = [record_id for record_id, _vector in batch]
         all_good = (
             len(set(ids_in_batch)) == len(ids_in_batch)
@@ -222,8 +286,9 @@ class VectorStoreMachine(RuleBasedStateMachine):
         assert [(record.vector, record.metadata) for record in listed] == list(self.model.values())
 
 
-# why: 20 steps find the same bugs; 50 (the default) is most of the run time
-VectorStoreMachine.TestCase.settings = settings(stateful_step_count=20)
+# why: 12 steps catch every bug we planted in the store; 50 (the default) took about
+# 5.6 s, nearly all of the model's time. Each short story is also cheaper to shrink.
+VectorStoreMachine.TestCase.settings = settings(stateful_step_count=12)
 # pytest runs this like any other test class: one run plays 100 random stories.
 # (Hypothesis doesn't say what type ``TestCase`` is, so ``cast`` tells pyright.)
 TestVectorStoreModel = cast("type[unittest.TestCase]", VectorStoreMachine.TestCase)
