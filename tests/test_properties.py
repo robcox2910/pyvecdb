@@ -22,6 +22,7 @@ import operator
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from hypothesis import given
 from hypothesis import strategies as st
@@ -181,7 +182,10 @@ MOST_SIZE = 3
 
 def tagged_shops() -> st.SearchStrategy[dict[str, tuple[list[float], dict[str, MetadataValue]]]]:
     """Make at least one shop: each ID with a 3D spot and maybe a colour and a size."""
-    fields = {"colour": st.sampled_from(COLOURS), "size": st.integers(0, MOST_SIZE)}
+    fields: dict[str, st.SearchStrategy[MetadataValue]] = {
+        "colour": st.sampled_from(COLOURS),
+        "size": st.integers(0, MOST_SIZE),
+    }
     # Most shops have both tags; some miss one or both, and must never match.
     tags = st.one_of(
         st.fixed_dictionaries(fields),
@@ -196,13 +200,15 @@ def tagged_shops() -> st.SearchStrategy[dict[str, tuple[list[float], dict[str, M
 def conditions_on(values: st.SearchStrategy[MetadataValue]) -> st.SearchStrategy[FilterCondition]:
     """Make one condition: a plain value, one operator, two operators, or "in a list"."""
     operators = st.sampled_from(["$eq", "$ne", "$gt", "$gte", "$lt", "$lte"])
-    return st.one_of(
+    conditions = st.one_of(
         values,
         st.dictionaries(operators, values, min_size=1, max_size=1),
         st.dictionaries(operators, values, min_size=1, max_size=1),
         st.dictionaries(operators, values, min_size=2, max_size=2),
         st.fixed_dictionaries({"$in": st.lists(values, max_size=3)}),
     )
+    # Hypothesis builds dicts pyright can't see as FilterCondition (dict values are invariant).
+    return cast("st.SearchStrategy[FilterCondition]", conditions)
 
 
 def filter_conditions() -> st.SearchStrategy[MetadataFilter]:
@@ -210,39 +216,22 @@ def filter_conditions() -> st.SearchStrategy[MetadataFilter]:
     colour = st.sampled_from(COLOURS)
     size = st.integers(-1, MOST_SIZE + 1)
     # Now and then the wrong kind (a colour asked to be "greater than" 3) must match nothing.
-    # A plain "size at least/at most/over/under N" with N a size some shop has,
-    # so shops sitting exactly on the line are common.
-    on_the_line = st.fixed_dictionaries(
-        {
-            "size": st.dictionaries(
-                st.sampled_from(["$gt", "$gte", "$lt", "$lte"]),
-                st.integers(0, MOST_SIZE),
-                min_size=1,
-                max_size=1,
-            )
-        }
-    )
+    on_size = conditions_on(st.one_of(size, size, size, colour))
+    on_colour = conditions_on(st.one_of(colour, colour, colour, size))
     return st.one_of(
-        on_the_line,
-        on_the_line,
-        st.fixed_dictionaries({"size": conditions_on(st.one_of(size, size, size, colour))}),
-        st.fixed_dictionaries({"colour": conditions_on(st.one_of(colour, colour, colour, size))}),
-        st.fixed_dictionaries(
-            {
-                "colour": conditions_on(st.one_of(colour, colour, colour, size)),
-                "size": conditions_on(st.one_of(size, size, size, colour)),
-            }
-        ),
+        st.fixed_dictionaries({"size": on_size}),
+        st.fixed_dictionaries({"colour": on_colour}),
+        st.fixed_dictionaries({"colour": on_colour, "size": on_size}),
     )
 
 
-def passes(actual: MetadataValue, operator: str, expected: object) -> bool:
+def passes(actual: MetadataValue, operator_name: str, expected: object) -> bool:
     """Say whether one value passes one operator: written out by hand, not PyVecDB's code."""
-    if operator == "$eq":
+    if operator_name == "$eq":
         return actual == expected
-    if operator == "$ne":
+    if operator_name == "$ne":
         return actual != expected
-    if operator == "$in":
+    if operator_name == "$in":
         return isinstance(expected, list) and actual in expected
     # The four comparisons only make sense between two numbers.
     if not isinstance(actual, int) or not isinstance(expected, int):
@@ -252,7 +241,7 @@ def passes(actual: MetadataValue, operator: str, expected: object) -> bool:
         "$gte": actual >= expected,
         "$lt": actual < expected,
         "$lte": actual <= expected,
-    }[operator]
+    }[operator_name]
 
 
 def shop_passes(tags: dict[str, MetadataValue], wanted: MetadataFilter) -> bool:
