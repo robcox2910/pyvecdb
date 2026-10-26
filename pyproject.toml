@@ -1,5 +1,5 @@
 [project]
-name = "pyvecdb"
+name = "fromscratch-pyvecdb"
 dynamic = ["version"]
 description = "An educational vector database library built from scratch in Python"
 readme = "README.md"
