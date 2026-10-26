@@ -51,3 +51,11 @@ By building pyvecdb, you'll understand:
 5. How to persist data to disk
 
 Let's get started!
+
+## Install
+
+```bash
+pip install fromscratch-pyvecdb
+```
+
+Or get the whole series at once with `pip install fromscratch-pystack`. To read the code or run the tests, clone it from [GitHub](https://github.com/robcox2910/pyvecdb).
