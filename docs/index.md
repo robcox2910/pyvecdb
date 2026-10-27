@@ -1,4 +1,8 @@
-# What is a Vector Database?
+---
+title: "Build your own vector database in Python"
+---
+
+# PyVecDB: Build your own vector database in Python
 
 ## The "Finding Similar Songs" Analogy
 
